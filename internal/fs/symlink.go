@@ -92,7 +92,8 @@ func (sm *SymlinkManager) CreateSymlink(target, source string, opts types.ApplyO
 	}
 
 	// Remove existing target
-	if _, err := os.Stat(target); err == nil {
+	// Remove existing target (use Lstat to detect broken symlinks too)
+	if _, err := os.Lstat(target); err == nil {
 		if !opts.DryRun {
 			if err := os.Remove(target); err != nil {
 				if os.IsPermission(err) {
