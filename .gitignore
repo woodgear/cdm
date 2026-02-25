@@ -1,0 +1,17 @@
+# Binaries
+cdm
+cdm-*
+
+# Test files
+test-configs/
+cdm-plan.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
