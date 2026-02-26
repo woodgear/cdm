@@ -79,16 +79,13 @@ This is equivalent to running 'plan' followed by 'apply'.`,
 
 // checkCmd represents the check command
 var checkCmd = &cobra.Command{
-	Use:   "check [plan-file]",
+	Use:   "check [paths...]",
 	Short: "Check link status",
-	Long: `Check if all links in the plan are correctly applied.
+	Long: `Check if all links are correctly applied.
 
-Verifies that:
-  - Target symlinks exist and point to correct sources
-  - Source files still exist
-  - No broken or incorrect links
-
-If no plan file is specified, uses ./cdm-plan.json by default.
+If no paths are specified and CDM_BASE is set, paths are auto-discovered:
+  - $CDM_BASE/share (common config, low priority)
+  - $CDM_BASE/<hostname> (host-specific config, high priority)
 
 Exit codes:
   0 - All links OK
@@ -260,22 +257,22 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 }
 
 func runCheck(cmd *cobra.Command, args []string) error {
-	planFile := "./cdm-plan.json"
-	if len(args) > 0 {
-		planFile = args[0]
+	// Get source paths (same pattern as plan/deploy)
+	sourcePaths, err := getSourcePaths(args)
+	if err != nil {
+		return err
 	}
 
-	// Check if plan file exists
-	if _, err := os.Stat(planFile); os.IsNotExist(err) {
-		return fmt.Errorf("plan file not found: %s", planFile)
+	// Generate plan (like deploy)
+	generator := plan.NewGenerator(flagVerbose)
+	p, err := generator.Generate(sourcePaths)
+	if err != nil {
+		return fmt.Errorf("failed to generate plan: %w", err)
 	}
 
 	// Check plan
 	checker := check.NewChecker(flagVerbose)
-	report, err := checker.CheckFromFile(planFile)
-	if err != nil {
-		return fmt.Errorf("failed to check plan: %w", err)
-	}
+	report := checker.CheckPlan(p)
 
 	// Print report
 	check.PrintReport(report, flagVerbose)
