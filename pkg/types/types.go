@@ -71,3 +71,29 @@ type ApplyOptions struct {
 	Backup  bool
 	Verbose bool
 }
+
+// LinkStatus represents the status of a link check
+type LinkStatus string
+
+const (
+	StatusOK           LinkStatus = "OK"            // Symlink exists and points to correct source
+	StatusMissing      LinkStatus = "MISSING"       // Target does not exist
+	StatusWrongLink    LinkStatus = "WRONG_LINK"   // Target is symlink but points to wrong source
+	StatusNotSymlink   LinkStatus = "NOT_SYMLINK"  // Target exists but is not a symlink
+	StatusSourceMissing LinkStatus = "SOURCE_MISSING" // Source file does not exist
+)
+
+// CheckResult represents the result of checking a single link
+ type CheckResult struct {
+	Link   Link
+	Status LinkStatus
+	Detail string // Additional detail (e.g., actual link target if wrong)
+}
+
+// CheckReport represents the full check report
+ type CheckReport struct {
+	Total    int
+	ByStatus map[LinkStatus]int
+	Results  []CheckResult
+	AllOK    bool
+}

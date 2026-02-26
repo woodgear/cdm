@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/woodgear/cdm/internal/apply"
+	"github.com/woodgear/cdm/internal/check"
 	"github.com/woodgear/cdm/internal/plan"
 	"github.com/woodgear/cdm/pkg/types"
 )
@@ -76,6 +77,24 @@ This is equivalent to running 'plan' followed by 'apply'.`,
 	RunE: runDeploy,
 }
 
+// checkCmd represents the check command
+var checkCmd = &cobra.Command{
+	Use:   "check [plan-file]",
+	Short: "Check link status",
+	Long: `Check if all links in the plan are correctly applied.
+
+Verifies that:
+  - Target symlinks exist and point to correct sources
+  - Source files still exist
+  - No broken or incorrect links
+
+If no plan file is specified, uses ./cdm-plan.json by default.
+
+Exit codes:
+  0 - All links OK
+  1 - Some links need attention`,
+	RunE: runCheck,
+}
 func init() {
 	// Global flags
 	rootCmd.PersistentFlags().BoolVarP(&flagVerbose, "verbose", "v", false, "Verbose output")
@@ -90,6 +109,7 @@ func init() {
 	rootCmd.AddCommand(planCmd)
 	rootCmd.AddCommand(applyCmd)
 	rootCmd.AddCommand(deployCmd)
+	rootCmd.AddCommand(checkCmd)
 	rootCmd.AddCommand(&cobra.Command{
 		Use:   "version",
 		Short: "Print the version number",
@@ -237,4 +257,33 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	}
 
 	return applier.Apply(p, opts)
+}
+
+func runCheck(cmd *cobra.Command, args []string) error {
+	planFile := "./cdm-plan.json"
+	if len(args) > 0 {
+		planFile = args[0]
+	}
+
+	// Check if plan file exists
+	if _, err := os.Stat(planFile); os.IsNotExist(err) {
+		return fmt.Errorf("plan file not found: %s", planFile)
+	}
+
+	// Check plan
+	checker := check.NewChecker(flagVerbose)
+	report, err := checker.CheckFromFile(planFile)
+	if err != nil {
+		return fmt.Errorf("failed to check plan: %w", err)
+	}
+
+	// Print report
+	check.PrintReport(report, flagVerbose)
+
+	// Return exit code based on result
+	if !report.AllOK {
+		os.Exit(1)
+	}
+
+	return nil
 }
