@@ -1,175 +1,194 @@
-# CDM - Config/Dotfile Manager
+# CDM - 配置/Dotfile 管理器
 
-A lightweight CLI tool for managing dotfiles and configuration files with multi-layer override support. CDM creates symlinks from source configuration files to target locations on your system.
+轻量级 CLI 工具，通过创建符号链接管理 dotfile 和配置文件，支持多层覆盖。
 
-## Features
+## 特性
 
-- **Multi-layer Override**: Support for shared (low priority) and host-specific (high priority) configurations
-- **Auto-discovery**: Automatically discovers config directories based on hostname
-- **Dry-run Mode**: Preview changes before applying
-- **Backup Support**: Optionally backup existing files before overwriting
-- **Sudo Integration**: Handles system directories requiring elevated privileges
-- **JSON Plan**: Generates executable plans for review before deployment
+- **多层覆盖**: 支持 share（低优先级）和主机特定（高优先级）配置覆盖
+- **自动发现**: 根据 hostname 自动发现配置目录
+- **文件夹级 Link**: 可配置整个文件夹作为单个 symlink，而非逐个文件
+- **子目录配置**: 配置文件可放在任意子目录，灵活管理
+- **状态检查**: 检查当前环境与配置的一致性
+- **Dry-run 模式**: 应用前预览变更
+- **备份支持**: 覆盖前可选备份现有文件
+- **Sudo 集成**: 自动处理需要 root 权限的系统目录
+- **JSON Plan**: 生成可审查的执行计划
 
-## Installation
+## 安装
 
 ```bash
-# Build from source
+# 从源码构建
 cd cdm
 go build -o cdm ./cmd/cdm
 
-# Or with version info
+# 带版本信息
 go build -ldflags "-X main.version=$(git describe --tags)" -o cdm ./cmd/cdm
 ```
 
-## Quick Start
+## 快速开始
 
-### 1. Set up your config directory structure
+### 1. 设置配置目录结构
 
 ```
 $CDM_BASE/
-├── share/                    # Common config (low priority)
-│   ├── home/                 # Files to link to $HOME
+├── share/                    # 通用配置（低优先级）
+│   ├── home/                 # 链接到 $HOME 的文件
 │   │   ├── .bashrc
 │   │   ├── .zshrc
 │   │   └── .config/
 │   │       └── starship.toml
-│   └── root/                 # Files to link to / (requires sudo)
+│   └── root/                 # 链接到 / 的文件（需要 sudo）
 │       └── etc/
 │           └── hosts
-└── <hostname>/               # Host-specific config (high priority)
+└── <hostname>/               # 主机特定配置（高优先级）
     ├── home/
-    │   └── .zshrc           # Overrides share/home/.zshrc
+    │   └── .zshrc           # 覆盖 share/home/.zshrc
     └── root/
 ```
 
-### 2. Set environment variable
+### 2. 设置环境变量
 
 ```bash
 export CDM_BASE=/path/to/your/configs
 ```
 
-### 3. Generate a plan (dry-run by default)
+### 3. 生成计划
 
 ```bash
-# Auto-discover from $CDM_BASE/share and $CDM_BASE/<hostname>
-cdm plan -d
+# 自动发现（使用 $CDM_BASE/share 和 $CDM_BASE/<hostname>）
+cdm plan
 
-# Or specify paths explicitly
-cdm plan /path/to/share /path/to/hostname -d
+# 或显式指定路径
+cdm plan /path/to/share /path/to/hostname
 ```
 
-### 4. Apply the plan
+### 4. 应用计划
 
 ```bash
-# Apply with backup
+# 应用并备份
 cdm apply --backup
 
-# Or deploy in one step
+# 或一步完成
 cdm deploy --backup
 ```
 
-## Commands
+## 命令
 
 ### `cdm plan [paths...]`
 
-Generate an execution plan from source directories.
+生成执行计划。
 
 ```bash
-# Auto-discover (uses $CDM_BASE)
+# 自动发现（使用 $CDM_BASE）
 cdm plan
 
-# Specify paths
+# 指定路径
 cdm plan ./configs/share ./configs/myhost
 
-# Custom output file
+# 自定义输出文件
 cdm plan -o my-plan.json
 
-# Verbose output
+# 详细输出
 cdm plan -v
 ```
 
 ### `cdm apply [plan-file]`
 
-Apply an execution plan to create symlinks.
+应用执行计划，创建符号链接。
 
 ```bash
-# Apply default plan file (./cdm-plan.json)
+# 应用默认计划文件 (./cdm-plan.json)
 cdm apply
 
-# Apply specific plan
+# 应用指定计划
 cdm apply my-plan.json
 
-# Dry-run (show what would be done)
+# Dry-run（仅显示将执行的操作）
 cdm apply -d
 
-# Backup existing files before overwriting
+# 覆盖前备份
 cdm apply --backup
 
-# Verbose output
+# 详细输出
 cdm apply -v
 ```
 
 ### `cdm deploy [paths...]`
 
-Generate and apply a plan in one step.
+一步完成计划生成和应用。
 
 ```bash
 cdm deploy --backup -v
 ```
 
+### `cdm check [paths...]`
+
+检查链接状态，验证配置是否正确应用。
+
+```bash
+# 自动发现
+cdm check
+
+# 指定路径
+cdm check /path/to/configs
+
+# 退出码：
+#   0 - 所有链接正常
+#   1 - 有链接需要处理
+```
+
 ### `cdm version`
 
-Print the version number.
+打印版本号。
 
-## Options
+## 选项
 
-| Flag | Short | Description |
-|------|-------|-------------|
-| `--verbose` | `-v` | Verbose output |
-| `--dry-run` | `-d` | Show what would be done without executing |
-| `--backup` | `-b` | Backup existing files before overwriting |
-| `--cdm-base` | | Base configuration directory (overrides CDM_BASE env var) |
-| `--output` | `-o` | Output plan file (default: ./cdm-plan.json) |
+| Flag | Short | 说明 |
+|------|-------|------|
+| `--verbose` | `-v` | 详细输出 |
+| `--dry-run` | `-d` | 仅显示将执行的操作，不实际执行 |
+| `--backup` | `-b` | 覆盖前备份现有文件 |
+| `--cdm-base` | | 配置基础目录（覆盖 CDM_BASE 环境变量） |
+| `--output` | `-o` | 输出计划文件（默认：./cdm-plan.json） |
 
-## Configuration
+## 配置
 
-### Directory Structure
+### 目录结构
 
-CDM expects source directories to contain `home/` and/or `root/` subdirectories:
+CDM 期望源目录包含 `home/` 和/或 `root/` 子目录：
 
 ```
 source/
-├── home/          → Files to link to $HOME
+├── home/          → 链接到 $HOME 的文件
 │   ├── .bashrc
 │   └── .config/
 │       └── starship.toml
-└── root/          → Files to link to /
+└── root/          → 链接到 / 的文件
     └── etc/
         └── hosts
 ```
 
-### Override Priority
+### 覆盖优先级
 
-When multiple source paths are provided, later paths override earlier ones:
+当提供多个源路径时，后面的覆盖前面的：
 
 ```bash
 cdm plan ./share ./myhost
 ```
 
-- `./share/home/.zshrc` → links to `~/.zshrc`
-- `./myhost/home/.zshrc` → **overrides** and links to `~/.zshrc`
+- `./share/home/.zshrc` → 链接到 `~/.zshrc`
+- `./myhost/home/.zshrc` → **覆盖**并链接到 `~/.zshrc`
 
-### Auto-discovery
+### 自动发现
 
-If no paths are specified and `CDM_BASE` is set:
+如果未指定路径且设置了 `CDM_BASE`：
 
-1. `$CDM_BASE/share` (common config, low priority)
-2. `$CDM_BASE/<hostname>` (host-specific config, high priority)
+1. `$CDM_BASE/share`（通用配置，低优先级）
+2. `$CDM_BASE/<hostname>`（主机特定配置，高优先级）
 
-### Optional Config File (`.cdm.conf.json`)
+### 配置文件 (`.cdm.conf.json`)
 
-Place in source directories to customize behavior:
+放在源目录或子目录中，自定义行为：
 
 ```json
 {
@@ -180,10 +199,74 @@ Place in source directories to customize behavior:
       "target": "~/.config/nvim"
     }
   ],
+  "linkFolders": [
+    "home/.config/nvim",
+    "home/.config/zed"
+  ],
   "exclude": [
     "*.bak",
     "*.tmp"
   ],
+  "hooks": {
+    "preApply": "echo '开始部署'",
+    "postApply": "echo '部署完成'"
+  }
+}
+```
+
+#### linkFolders - 文件夹级 Link
+
+声明整个文件夹作为单个 symlink，而不是递归链接每个文件：
+
+```json
+{
+  "linkFolders": ["home/.config/nvim"]
+}
+```
+
+**效果对比：**
+
+| 不使用 linkFolders | 使用 linkFolders |
+|-------------------|-----------------|
+| `~/.config/nvim/init.lua` → 单独链接 | `~/.config/nvim` → 整个文件夹链接 |
+| `~/.config/nvim/lua/config.lua` → 单独链接 | (通过文件夹链接自动可用) |
+| ...更多文件更多链接 | 只有 1 个链接 |
+
+**配置位置：**
+- 放在源目录根目录：`linkFolders` 路径相对于根目录
+- 放在子目录：`linkFolders` 路径相对于该子目录
+
+#### pathMappings - 路径映射
+
+将源路径映射到不同的目标路径：
+
+```json
+{
+  "pathMappings": [
+    {
+      "source": ".config/nvim",
+      "target": "~/.config/nvim"
+    }
+  ]
+}
+```
+
+#### exclude - 排除文件
+
+排除特定模式的文件：
+
+```json
+{
+  "exclude": ["*.bak", "*.tmp", "*.swp"]
+}
+```
+
+#### hooks - 钩子
+
+在应用前后执行命令：
+
+```json
+{
   "hooks": {
     "preApply": "echo 'Starting deployment'",
     "postApply": "echo 'Deployment complete'"
@@ -191,9 +274,9 @@ Place in source directories to customize behavior:
 }
 ```
 
-## Plan File Format
+## Plan 文件格式
 
-Generated plans are JSON files:
+生成的计划是 JSON 文件：
 
 ```json
 {
@@ -218,9 +301,9 @@ Generated plans are JSON files:
 }
 ```
 
-## Sudo Support
+## Sudo 支持
 
-CDM automatically detects when operations require elevated privileges (e.g., files under `/etc`, `/usr`) and will prompt for sudo when needed.
+CDM 自动检测需要提升权限的操作（如 `/etc`、`/usr` 下的文件），并在需要时提示输入 sudo 密码。
 
 ## License
 
