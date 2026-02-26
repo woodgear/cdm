@@ -63,6 +63,20 @@ func FileExists(path string) bool {
 	return !info.IsDir()
 }
 
+// isDirWritable checks if the directory containing the target path is writable
+// by attempting to create a temporary file in that directory
+func isDirWritable(target string) bool {
+	dir := filepath.Dir(target)
+	// Try to create a test file to check write permission
+	testFile := filepath.Join(dir, ".cdm-write-test-"+time.Now().Format("20060102150405.000"))
+	err := os.WriteFile(testFile, []byte{}, 0644)
+	if err != nil {
+		return false
+	}
+	os.Remove(testFile)
+	return true
+}
+
 // CreateSymlink creates a symlink with backup and sudo support
 func (sm *SymlinkManager) CreateSymlink(target, source string, opts types.ApplyOptions) error {
 	// Check if already correct
@@ -71,6 +85,13 @@ func (sm *SymlinkManager) CreateSymlink(target, source string, opts types.ApplyO
 			fmt.Printf("[SKIP] Already linked: %s -> %s\n", target, source)
 		}
 		return nil
+	}
+
+	// Proactively check if we need sudo (directory writeability check)
+	// This matches the bash version's: [[ -w "$(dirname "$target")" ]]
+	needsSudo := !isDirWritable(target)
+	if needsSudo && sm.verbose {
+		fmt.Printf("[SUDO] Directory not writable, will use sudo for: %s\n", target)
 	}
 
 	// Backup existing file if requested
@@ -91,19 +112,18 @@ func (sm *SymlinkManager) CreateSymlink(target, source string, opts types.ApplyO
 		}
 	}
 
-	// Remove existing target
 	// Remove existing target (use Lstat to detect broken symlinks too)
 	if _, err := os.Lstat(target); err == nil {
 		if !opts.DryRun {
-			if err := os.Remove(target); err != nil {
-				if os.IsPermission(err) {
-					// Try with sudo
-					if err := removeWithSudo(target); err != nil {
-						return fmt.Errorf("failed to remove %s (even with sudo): %w", target, err)
-					}
-				} else {
-					return fmt.Errorf("failed to remove %s: %w", target, err)
-				}
+			var err error
+			if needsSudo {
+				// Use sudo proactively when directory is not writable
+				err = removeWithSudo(target)
+			} else {
+				err = os.Remove(target)
+			}
+			if err != nil {
+				return fmt.Errorf("failed to remove %s: %w", target, err)
 			}
 			if sm.verbose {
 				fmt.Printf("[REMOVE] %s\n", target)
@@ -117,15 +137,15 @@ func (sm *SymlinkManager) CreateSymlink(target, source string, opts types.ApplyO
 	targetDir := filepath.Dir(target)
 	if _, err := os.Stat(targetDir); os.IsNotExist(err) {
 		if !opts.DryRun {
-			if err := os.MkdirAll(targetDir, 0755); err != nil {
-				if os.IsPermission(err) {
-					// Try with sudo
-					if err := mkdirWithSudo(targetDir); err != nil {
-						return fmt.Errorf("failed to create directory %s (even with sudo): %w", targetDir, err)
-					}
-				} else {
-					return fmt.Errorf("failed to create directory %s: %w", targetDir, err)
-				}
+			var err error
+			if needsSudo {
+				// Use sudo proactively when directory is not writable
+				err = mkdirWithSudo(targetDir)
+			} else {
+				err = os.MkdirAll(targetDir, 0755)
+			}
+			if err != nil {
+				return fmt.Errorf("failed to create directory %s: %w", targetDir, err)
 			}
 			if sm.verbose {
 				fmt.Printf("[MKDIR] %s\n", targetDir)
@@ -137,15 +157,15 @@ func (sm *SymlinkManager) CreateSymlink(target, source string, opts types.ApplyO
 
 	// Create symlink
 	if !opts.DryRun {
-		if err := os.Symlink(source, target); err != nil {
-			if os.IsPermission(err) {
-				// Try with sudo
-				if err := symlinkWithSudo(target, source); err != nil {
-					return fmt.Errorf("failed to create symlink %s (even with sudo): %w", target, err)
-				}
-			} else {
-				return fmt.Errorf("failed to create symlink %s: %w", target, err)
-			}
+		var err error
+		if needsSudo {
+			// Use sudo proactively when directory is not writable
+			err = symlinkWithSudo(target, source)
+		} else {
+			err = os.Symlink(source, target)
+		}
+		if err != nil {
+			return fmt.Errorf("failed to create symlink %s: %w", target, err)
 		}
 		if sm.verbose {
 			fmt.Printf("[LINK] %s -> %s\n", target, source)
