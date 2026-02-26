@@ -8,6 +8,7 @@ type Config struct {
 	Version      string        `json:"version,omitempty"`
 	PathMappings []PathMapping `json:"pathMappings,omitempty"`
 	Exclude      []string      `json:"exclude,omitempty"`
+	LinkFolders  []string      `json:"linkFolders,omitempty"` // Directories to link as a whole (relative to this config's location)
 	Hooks        *Hooks        `json:"hooks,omitempty"`
 }
 

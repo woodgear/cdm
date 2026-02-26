@@ -25,7 +25,8 @@ func NewScanner(verbose bool) *Scanner {
 
 // ScanDir scans a directory for files to link
 // baseType: "home" maps to $HOME, "root" maps to /
-func (s *Scanner) ScanDir(srcDir, baseType string) ([]types.FileEntry, error) {
+// linkFolders: set of absolute paths that should be linked as folders
+func (s *Scanner) ScanDir(srcDir, baseType string, linkFolders map[string]bool) ([]types.FileEntry, error) {
 	var entries []types.FileEntry
 
 	var basePath string
@@ -69,11 +70,6 @@ func (s *Scanner) ScanDir(srcDir, baseType string) ([]types.FileEntry, error) {
 			return err
 		}
 
-		// Skip directories
-		if info.IsDir() {
-			return nil
-		}
-
 		// Get relative path
 		relPath, err := filepath.Rel(scanPath, path)
 		if err != nil {
@@ -92,6 +88,39 @@ func (s *Scanner) ScanDir(srcDir, baseType string) ([]types.FileEntry, error) {
 		absSource, err := filepath.Abs(path)
 		if err != nil {
 			return fmt.Errorf("failed to get absolute path: %w", err)
+		}
+
+		// Check if this path is under a linkFolder
+		for folderPath := range linkFolders {
+			// If this path is a linkFolder itself
+			if absSource == folderPath && info.IsDir() {
+				// Add folder link entry
+				entries = append(entries, types.FileEntry{
+					Source:     absSource,
+					Target:     targetPath,
+					SourcePath: srcDir,
+					Reason:     "folder link",
+				})
+				if s.verbose {
+					fmt.Printf("[FOLDER_LINK] %s -> %s\n", absSource, targetPath)
+				}
+				// Skip walking into this directory
+				return filepath.SkipDir
+			}
+
+			// If this path is under a linkFolder
+			if strings.HasPrefix(absSource, folderPath+string(filepath.Separator)) {
+				// Skip this file/directory
+				if info.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+		}
+
+		// Skip directories (they're handled via linkFolders or files inside)
+		if info.IsDir() {
+			return nil
 		}
 
 		entries = append(entries, types.FileEntry{
@@ -153,6 +182,25 @@ func (g *Generator) Generate(sourcePaths []string) (*types.Plan, error) {
 		resolvedPaths = append(resolvedPaths, absPath)
 	}
 
+	// Load configurations first (to get linkFolders)
+	configs, err := g.configLoader.LoadAll(resolvedPaths)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load configurations: %w", err)
+	}
+
+	// Build linkFolders set from all configs
+	linkFolders := make(map[string]bool)
+	for configPath, cfg := range configs {
+		for _, folder := range cfg.LinkFolders {
+			// Resolve folder path relative to config location
+			folderAbsPath := filepath.Join(configPath, folder)
+			linkFolders[folderAbsPath] = true
+			if g.verbose {
+				fmt.Printf("[LINK_FOLDER] %s\n", folderAbsPath)
+			}
+		}
+	}
+
 	// Scan all source directories
 	var allEntries []types.FileEntry
 	for _, srcPath := range resolvedPaths {
@@ -161,14 +209,14 @@ func (g *Generator) Generate(sourcePaths []string) (*types.Plan, error) {
 		}
 
 		// Scan home directory
-		homeEntries, err := g.scanner.ScanDir(srcPath, "home")
+		homeEntries, err := g.scanner.ScanDir(srcPath, "home", linkFolders)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan home directory in %s: %w", srcPath, err)
 		}
 		allEntries = append(allEntries, homeEntries...)
 
 		// Scan root directory
-		rootEntries, err := g.scanner.ScanDir(srcPath, "root")
+		rootEntries, err := g.scanner.ScanDir(srcPath, "root", linkFolders)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan root directory in %s: %w", srcPath, err)
 		}
@@ -201,11 +249,7 @@ func (g *Generator) Generate(sourcePaths []string) (*types.Plan, error) {
 		entries = append(entries, entry)
 	}
 
-	// Load and apply configurations
-	configs, err := g.configLoader.LoadAll(resolvedPaths)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load configurations: %w", err)
-	}
+	// Apply path mappings
 	entries = g.applyPathMappings(configs, entries)
 
 	// Build links
