@@ -201,6 +201,22 @@ func (g *Generator) Generate(sourcePaths []string) (*types.Plan, error) {
 		}
 	}
 
+	// Collect all repos from configs
+	var allRepos []types.RepoConfig
+	for configPath, cfg := range configs {
+		for _, repo := range cfg.Repos {
+			// Resolve repo path relative to config location
+			resolvedRepo := repo
+			if !filepath.IsAbs(repo.Path) {
+				resolvedRepo.Path = filepath.Join(configPath, repo.Path)
+			}
+			allRepos = append(allRepos, resolvedRepo)
+			if g.verbose {
+				fmt.Printf("[REPO] %s -> %s (%s)\n", resolvedRepo.Path, repo.URL, repo.Branch)
+			}
+		}
+	}
+
 	// Scan all source directories
 	var allEntries []types.FileEntry
 	for _, srcPath := range resolvedPaths {
@@ -252,6 +268,10 @@ func (g *Generator) Generate(sourcePaths []string) (*types.Plan, error) {
 	// Apply path mappings
 	entries = g.applyPathMappings(configs, entries)
 
+	// Collect external path mappings (links to files/dirs outside cdm management)
+	externalEntries := g.collectExternalPathMappings(configs)
+	entries = append(entries, externalEntries...)
+
 	// Build links
 	var statNew, statOverride int
 	links := make([]types.Link, 0, len(entries))
@@ -283,6 +303,7 @@ func (g *Generator) Generate(sourcePaths []string) (*types.Plan, error) {
 		Hostname:  hostname,
 		Sources:   resolvedPaths,
 		Links:     links,
+		Repos:     allRepos,
 		Stats: types.Stats{
 			Total:    len(links),
 			New:      statNew,
@@ -317,10 +338,26 @@ func (g *Generator) applyPathMappings(configs map[string]*types.Config, entries 
 					relPath = strings.TrimPrefix(entry.Target, "/")
 				}
 
+				// Expand ~ in source and convert to relative path
+				sourceExpanded, err := fs.ExpandPath(mapping.Source)
+				if err != nil {
+					continue
+				}
+				var sourceRelPath string
+				if home != "" && strings.HasPrefix(sourceExpanded, home) {
+					sourceRelPath = strings.TrimPrefix(sourceExpanded, home)
+					sourceRelPath = strings.TrimPrefix(sourceRelPath, string(filepath.Separator))
+				} else if strings.HasPrefix(sourceExpanded, "/") {
+					sourceRelPath = strings.TrimPrefix(sourceExpanded, "/")
+				} else {
+					// Relative path, use as-is
+					sourceRelPath = sourceExpanded
+				}
+
 				// Check if relPath starts with mapping source
-				if strings.HasPrefix(relPath, mapping.Source) {
+				if strings.HasPrefix(relPath, sourceRelPath) {
 					// Calculate new target
-					newTarget := mapping.Target + strings.TrimPrefix(relPath, mapping.Source)
+					newTarget := mapping.Target + strings.TrimPrefix(relPath, sourceRelPath)
 
 					// Expand ~ in target
 					expanded, err := fs.ExpandPath(newTarget)
@@ -340,4 +377,51 @@ func (g *Generator) applyPathMappings(configs map[string]*types.Config, entries 
 	}
 
 	return result
+}
+
+// collectExternalPathMappings collects path mappings for files/dirs outside cdm management
+func (g *Generator) collectExternalPathMappings(configs map[string]*types.Config) []types.FileEntry {
+	var entries []types.FileEntry
+
+	for srcPath, cfg := range configs {
+		if len(cfg.PathMappings) == 0 {
+			continue
+		}
+
+		for _, mapping := range cfg.PathMappings {
+			// Expand source path
+			sourceExpanded, err := fs.ExpandPath(mapping.Source)
+			if err != nil {
+				continue
+			}
+
+			// Check if source exists on the system
+			if _, err := os.Stat(sourceExpanded); err != nil {
+				// Source doesn't exist, skip
+				continue
+			}
+
+			// Expand target path
+			targetExpanded, err := fs.ExpandPath(mapping.Target)
+			if err != nil {
+				continue
+			}
+
+			// Create entry: target -> source (symlink points from target to source)
+			entry := types.FileEntry{
+				Source:     sourceExpanded,
+				Target:     targetExpanded,
+				SourcePath: srcPath,
+				Reason:     "external mapping",
+			}
+
+			entries = append(entries, entry)
+
+			if g.verbose {
+				fmt.Printf("[EXTERNAL_MAPPING] %s -> %s\n", targetExpanded, sourceExpanded)
+			}
+		}
+	}
+
+	return entries
 }

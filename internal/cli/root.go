@@ -11,12 +11,16 @@ import (
 	"github.com/woodgear/cdm/internal/apply"
 	"github.com/woodgear/cdm/internal/check"
 	"github.com/woodgear/cdm/internal/plan"
+	"github.com/woodgear/cdm/internal/repo"
 	"github.com/woodgear/cdm/pkg/types"
 )
 
 var (
 	// Version is set at build time
-	Version = "1.0.0"
+	Version   = "1.0.0"
+	GitCommit = "unknown"
+	GitBranch = "unknown"
+	BuildDate = "unknown"
 
 	// Global flags
 	flagVerbose bool
@@ -24,6 +28,9 @@ var (
 	flagBackup  bool
 	flagCdmBase string
 	flagOutput  string
+
+	// Check-specific flags
+	flagIgnoreOK bool
 )
 
 // rootCmd represents the base command
@@ -33,7 +40,6 @@ var rootCmd = &cobra.Command{
 	Long: `CDM (Config/Dotfile Manager) is a tool for managing dotfiles
 with multi-layer override support. It creates symlinks from source
 configuration files to target locations.`,
-	Version: Version,
 }
 
 // planCmd represents the plan command
@@ -92,6 +98,20 @@ Exit codes:
   1 - Some links need attention`,
 	RunE: runCheck,
 }
+
+// repoScanCmd represents the repo-scan command
+var repoScanCmd = &cobra.Command{
+	Use:   "repo-scan [path]",
+	Short: "Scan directory for git repos",
+	Long: `Scan a directory for all git repositories and output as JSON.
+
+Output format can be used directly in .cdm.conf.json repos section.
+
+Example:
+  cdm repo-scan ~/projects > repos.json`,
+	Args: cobra.MaximumNArgs(1),
+	RunE: runRepoScan,
+}
 func init() {
 	// Global flags
 	rootCmd.PersistentFlags().BoolVarP(&flagVerbose, "verbose", "v", false, "Verbose output")
@@ -102,16 +122,23 @@ func init() {
 	// Plan-specific flags
 	planCmd.Flags().StringVarP(&flagOutput, "output", "o", "./cdm-plan.json", "Output plan file")
 
+	// Check-specific flags
+	checkCmd.Flags().BoolVar(&flagIgnoreOK, "ignore-ok", false, "Hide OK status entries")
+
 	// Add commands
 	rootCmd.AddCommand(planCmd)
 	rootCmd.AddCommand(applyCmd)
 	rootCmd.AddCommand(deployCmd)
 	rootCmd.AddCommand(checkCmd)
+	rootCmd.AddCommand(repoScanCmd)
 	rootCmd.AddCommand(&cobra.Command{
 		Use:   "version",
-		Short: "Print the version number",
+		Short: "Print version info",
 		Run: func(cmd *cobra.Command, args []string) {
 			fmt.Printf("CDM v%s\n", Version)
+			fmt.Printf("  branch: %s\n", GitBranch)
+			fmt.Printf("  commit: %s\n", GitCommit)
+			fmt.Printf("  built:  %s\n", BuildDate)
 		},
 	})
 }
@@ -245,7 +272,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to write plan: %w", err)
 	}
 
-	// Apply plan
+	// Apply plan (symlinks)
 	applier := apply.NewApplier(flagVerbose)
 	opts := types.ApplyOptions{
 		DryRun:  flagDryRun,
@@ -253,7 +280,21 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		Verbose: flagVerbose,
 	}
 
-	return applier.Apply(p, opts)
+	if err := applier.Apply(p, opts); err != nil {
+		return err
+	}
+
+	// Deploy repos
+	if len(p.Repos) > 0 {
+		fmt.Printf("\n[INFO] Deploying %d repos...\n", len(p.Repos))
+		manager := repo.NewManager(flagVerbose)
+		for _, r := range p.Repos {
+			result := manager.DeployRepo(r.Path, r, flagDryRun)
+			printRepoResult(result)
+		}
+	}
+
+	return nil
 }
 
 func runCheck(cmd *cobra.Command, args []string) error {
@@ -270,17 +311,81 @@ func runCheck(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to generate plan: %w", err)
 	}
 
-	// Check plan
-	checker := check.NewChecker(flagVerbose)
-	report := checker.CheckPlan(p)
+	allOK := true
 
-	// Print report
-	check.PrintReport(report, flagVerbose)
+	// Check symlinks
+	if len(p.Links) > 0 {
+		checker := check.NewChecker(flagVerbose)
+		report := checker.CheckPlan(p)
+		check.PrintReport(report, flagVerbose, flagIgnoreOK)
+		if !report.AllOK {
+			allOK = false
+		}
+	}
+
+	// Check repos
+	if len(p.Repos) > 0 {
+		fmt.Printf("\n[INFO] Checking %d repos...\n", len(p.Repos))
+		manager := repo.NewManager(flagVerbose)
+		for _, r := range p.Repos {
+			result := manager.CheckRepo(r.Path, r)
+			printRepoCheckResult(result)
+			if result.Status != types.RepoStatusOK {
+				allOK = false
+			}
+		}
+	}
 
 	// Return exit code based on result
-	if !report.AllOK {
+	if !allOK {
 		os.Exit(1)
 	}
 
 	return nil
+}
+
+func runRepoScan(cmd *cobra.Command, args []string) error {
+	scanPath := "."
+	if len(args) > 0 {
+		scanPath = args[0]
+	}
+
+	absPath, err := filepath.Abs(scanPath)
+	if err != nil {
+		return fmt.Errorf("failed to resolve path: %w", err)
+	}
+
+	repos, err := repo.ScanRepos(absPath)
+	if err != nil {
+		return fmt.Errorf("failed to scan repos: %w", err)
+	}
+
+	return repo.PrintScanResult(repos)
+}
+
+func printRepoResult(result types.RepoCheckResult) {
+	statusLabel := string(result.Status)
+	switch result.Status {
+	case types.RepoStatusOK, types.RepoStatusCloned:
+		fmt.Printf("[OK] %s: %s\n", result.Config.Path, result.Detail)
+	case types.RepoStatusMissing:
+		if result.Detail != "" && len(result.Detail) > 4 && result.Detail[:4] == "would" {
+			fmt.Printf("[DRY-RUN] %s: %s\n", result.Config.Path, result.Detail)
+		} else {
+			fmt.Printf("[CLONE] %s: %s -> %s\n", result.Config.Path, result.Config.URL, result.Config.Branch)
+		}
+	default:
+		fmt.Printf("[%s] %s: %s\n", statusLabel, result.Config.Path, result.Detail)
+	}
+}
+
+func printRepoCheckResult(result types.RepoCheckResult) {
+	fmt.Printf("%s\t%s\t%s", result.Status, result.Config.Path, result.CurrentBranch)
+	if result.Ahead > 0 || result.Behind > 0 {
+		fmt.Printf("\tahead:%d,behind:%d", result.Ahead, result.Behind)
+	}
+	if result.Detail != "" && result.Detail != "ok" {
+		fmt.Printf("\t%s", result.Detail)
+	}
+	fmt.Println()
 }

@@ -94,7 +94,7 @@ func (c *Checker) checkLink(link types.Link) types.CheckResult {
 }
 
 // PrintReport prints a formatted check report (Unix style)
-func PrintReport(report *types.CheckReport, verbose bool) {
+func PrintReport(report *types.CheckReport, verbose bool, ignoreOK bool) {
 	// Status labels
 	labels := map[types.LinkStatus]string{
 		types.StatusOK:           "OK",
@@ -106,10 +106,13 @@ func PrintReport(report *types.CheckReport, verbose bool) {
 
 	// Print results to stdout
 	for _, result := range report.Results {
+		if ignoreOK && result.Status == types.StatusOK {
+			continue
+		}
 		label := labels[result.Status]
-		target := result.Link.Target
 		source := result.Link.Source
-		fmt.Printf("%s\t%s\t%s\n", label, target, source)
+		target := result.Link.Target
+		fmt.Printf("%s\t%s\t%s\n", label, source, target)
 	}
 }
 

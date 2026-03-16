@@ -95,8 +95,9 @@ func (l *Loader) loadRecursive(basePath, currentPath string) (map[string]*types.
 		}
 
 		// Only add if config has content (not empty)
-		if config.Version != "" || len(config.PathMappings) > 0 || 
-			len(config.Exclude) > 0 || len(config.LinkFolders) > 0 || config.Hooks != nil {
+		if config.Version != "" || len(config.PathMappings) > 0 ||
+			len(config.Exclude) > 0 || len(config.LinkFolders) > 0 ||
+			len(config.Repos) > 0 || config.Hooks != nil {
 			configs[subDirPath] = config
 		}
 

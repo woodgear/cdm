@@ -10,6 +10,7 @@ type Config struct {
 	Exclude      []string      `json:"exclude,omitempty"`
 	LinkFolders  []string      `json:"linkFolders,omitempty"` // Directories to link as a whole (relative to this config's location)
 	Hooks        *Hooks        `json:"hooks,omitempty"`
+	Repos        []RepoConfig  `json:"repos,omitempty"`       // Git repositories to manage
 }
 
 // PathMapping defines a source-to-target path mapping rule
@@ -24,14 +25,23 @@ type Hooks struct {
 	PostApply string `json:"postApply,omitempty"`
 }
 
+// RepoConfig represents a git repository configuration
+type RepoConfig struct {
+	Path   string `json:"path"`            // Relative path from config file location
+	URL    string `json:"url"`             // Clone URL (required)
+	Branch string `json:"branch"`          // Target branch (required)
+	Remote string `json:"remote,omitempty"` // Remote name (default: origin)
+}
+
 // Plan represents the execution plan structure
 type Plan struct {
-	Version   string    `json:"version"`
-	Timestamp time.Time `json:"timestamp"`
-	Hostname  string    `json:"hostname"`
-	Sources   []string  `json:"sources"`
-	Links     []Link    `json:"links"`
-	Stats     Stats     `json:"stats"`
+	Version   string       `json:"version"`
+	Timestamp time.Time    `json:"timestamp"`
+	Hostname  string       `json:"hostname"`
+	Sources   []string     `json:"sources"`
+	Links     []Link       `json:"links"`
+	Repos     []RepoConfig `json:"repos,omitempty"`
+	Stats     Stats        `json:"stats"`
 }
 
 // Link represents a single symlink operation
@@ -96,5 +106,36 @@ const (
 	Total    int
 	ByStatus map[LinkStatus]int
 	Results  []CheckResult
+	AllOK    bool
+}
+
+// RepoStatus represents the status of a repo check
+type RepoStatus string
+
+const (
+	RepoStatusOK          RepoStatus = "OK"           // Repo exists, correct branch, synced
+	RepoStatusMissing     RepoStatus = "MISSING"      // Directory does not exist
+	RepoStatusCloned      RepoStatus = "CLONED"       // Just cloned
+	RepoStatusWrongBranch RepoStatus = "WRONG_BRANCH" // Wrong branch checked out
+	RepoStatusNotSynced   RepoStatus = "NOT_SYNCED"   // Ahead or behind remote
+	RepoStatusNotRepo     RepoStatus = "NOT_REPO"     // Exists but not a git repo
+	RepoStatusWrongRepo   RepoStatus = "WRONG_REPO"   // Wrong remote URL
+)
+
+// RepoCheckResult represents the result of checking a single repo
+type RepoCheckResult struct {
+	Config        RepoConfig
+	Status        RepoStatus
+	CurrentBranch string
+	Ahead         int
+	Behind        int
+	Detail        string
+}
+
+// RepoCheckReport represents the full repo check report
+type RepoCheckReport struct {
+	Total    int
+	ByStatus map[RepoStatus]int
+	Results  []RepoCheckResult
 	AllOK    bool
 }
