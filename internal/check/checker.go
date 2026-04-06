@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/woodgear/cdm/internal/fs"
 	"github.com/woodgear/cdm/pkg/types"
 )
 
@@ -43,6 +44,14 @@ func (c *Checker) CheckPlan(plan *types.Plan) *types.CheckReport {
 
 // checkLink checks a single link and returns its status
 func (c *Checker) checkLink(link types.Link) types.CheckResult {
+	if link.Action == "copy" {
+		return c.checkCopy(link)
+	}
+	return c.checkSymlink(link)
+}
+
+// checkSymlink checks a symlink entry
+func (c *Checker) checkSymlink(link types.Link) types.CheckResult {
 	result := types.CheckResult{
 		Link: link,
 	}
@@ -93,6 +102,45 @@ func (c *Checker) checkLink(link types.Link) types.CheckResult {
 	return result
 }
 
+// checkCopy checks a copy entry by comparing file contents
+func (c *Checker) checkCopy(link types.Link) types.CheckResult {
+	result := types.CheckResult{
+		Link: link,
+	}
+
+	// Check if source exists
+	if _, err := os.Stat(link.Source); os.IsNotExist(err) {
+		result.Status = types.StatusSourceMissing
+		result.Detail = fmt.Sprintf("source file does not exist: %s", link.Source)
+		return result
+	}
+
+	// Check if target exists
+	if _, err := os.Stat(link.Target); os.IsNotExist(err) {
+		result.Status = types.StatusMissing
+		result.Detail = "target does not exist"
+		return result
+	}
+
+	// Compare contents
+	match, err := fs.FileContentsMatch(link.Source, link.Target)
+	if err != nil {
+		result.Status = types.StatusMismatch
+		result.Detail = fmt.Sprintf("failed to compare: %v", err)
+		return result
+	}
+
+	if match {
+		result.Status = types.StatusOK
+		result.Detail = "content matches"
+	} else {
+		result.Status = types.StatusMismatch
+		result.Detail = "content differs from source"
+	}
+
+	return result
+}
+
 // PrintReport prints a formatted check report (Unix style)
 func PrintReport(report *types.CheckReport, verbose bool, ignoreOK bool) {
 	// Status labels
@@ -102,6 +150,7 @@ func PrintReport(report *types.CheckReport, verbose bool, ignoreOK bool) {
 		types.StatusWrongLink:    "WRONG_LINK",
 		types.StatusNotSymlink:   "NOT_SYMLINK",
 		types.StatusSourceMissing: "SOURCE_MISSING",
+		types.StatusMismatch:     "MISMATCH",
 	}
 
 	// Print results to stdout

@@ -131,6 +131,51 @@ func init() {
 	rootCmd.AddCommand(deployCmd)
 	rootCmd.AddCommand(checkCmd)
 	rootCmd.AddCommand(repoScanCmd)
+
+	// Completion command
+	completionCmd := &cobra.Command{
+		Use:   "completion [bash|zsh|fish|powershell]",
+		Short: "Generate shell completion script",
+		Long: `Generate shell completion script for cdm.
+
+Load completions:
+
+  Bash:
+    cdm completion bash > /etc/bash_completion.d/cdm
+    # or per-user:
+    cdm completion bash > ~/.local/share/bash-completion/completions/cdm
+
+  Zsh:
+    cdm completion zsh > "${fpath[1]}/_cdm"
+    # or source in .zshrc:
+    source <(cdm completion zsh)
+
+  Fish:
+    cdm completion fish > ~/.config/fish/completions/cdm.fish
+
+  PowerShell:
+    cdm completion powershell > cdm.ps1
+    # and source it in your profile`,
+		DisableFlagsInUseLine: true,
+		ValidArgs:             []string{"bash", "zsh", "fish", "powershell"},
+		Args:                  cobra.ExactValidArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			switch args[0] {
+			case "bash":
+				return rootCmd.GenBashCompletion(os.Stdout)
+			case "zsh":
+				return rootCmd.GenZshCompletion(os.Stdout)
+			case "fish":
+				return rootCmd.GenFishCompletion(os.Stdout, true)
+			case "powershell":
+				return rootCmd.GenPowerShellCompletionWithDesc(os.Stdout)
+			default:
+				return fmt.Errorf("unsupported shell type: %s", args[0])
+			}
+		},
+	}
+	rootCmd.AddCommand(completionCmd)
+
 	rootCmd.AddCommand(&cobra.Command{
 		Use:   "version",
 		Short: "Print version info",

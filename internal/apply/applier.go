@@ -77,9 +77,16 @@ func (a *Applier) Apply(plan *types.Plan, opts types.ApplyOptions) error {
 			continue
 		}
 
-		// Create symlink
-		if err := a.sm.CreateSymlink(link.Target, link.Source, opts); err != nil {
-			fmt.Printf("[ERROR] Failed to create symlink: %s\n", err)
+		var err error
+		switch link.Action {
+		case "copy":
+			err = a.sm.CopyFile(link.Target, link.Source, opts)
+		default: // "link"
+			err = a.sm.CreateSymlink(link.Target, link.Source, opts)
+		}
+
+		if err != nil {
+			fmt.Printf("[ERROR] Failed to %s: %s\n", link.Action, err)
 			skipped++
 			continue
 		}

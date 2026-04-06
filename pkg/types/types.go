@@ -5,12 +5,13 @@ import "time"
 
 // Config represents the .cdm.conf.json configuration file structure
 type Config struct {
-	Version      string        `json:"version,omitempty"`
-	PathMappings []PathMapping `json:"pathMappings,omitempty"`
-	Exclude      []string      `json:"exclude,omitempty"`
-	LinkFolders  []string      `json:"linkFolders,omitempty"` // Directories to link as a whole (relative to this config's location)
-	Hooks        *Hooks        `json:"hooks,omitempty"`
-	Repos        []RepoConfig  `json:"repos,omitempty"`       // Git repositories to manage
+	Version       string        `json:"version,omitempty"`
+	PathMappings  []PathMapping `json:"pathMappings,omitempty"`
+	FileMappings  []PathMapping `json:"fileMappings,omitempty"` // Files to copy (not symlink) for consistency
+	Exclude       []string      `json:"exclude,omitempty"`
+	LinkFolders   []string      `json:"linkFolders,omitempty"`  // Directories to link as a whole (relative to this config's location)
+	Hooks         *Hooks        `json:"hooks,omitempty"`
+	Repos         []RepoConfig  `json:"repos,omitempty"`        // Git repositories to manage
 }
 
 // PathMapping defines a source-to-target path mapping rule
@@ -44,12 +45,12 @@ type Plan struct {
 	Stats     Stats        `json:"stats"`
 }
 
-// Link represents a single symlink operation
+// Link represents a single deployment operation (symlink or copy)
 type Link struct {
 	Source string `json:"source"`
 	Target string `json:"target"`
-	Action string `json:"action"` // "link"
-	Reason string `json:"reason"` // "new" | "override from <name>"
+	Action string `json:"action"` // "link" | "copy"
+	Reason string `json:"reason"` // "new" | "override from <name>" | "file mapping"
 }
 
 // Stats contains execution statistics
@@ -87,11 +88,12 @@ type ApplyOptions struct {
 type LinkStatus string
 
 const (
-	StatusOK           LinkStatus = "OK"            // Symlink exists and points to correct source
+	StatusOK           LinkStatus = "OK"            // Symlink/copy exists and is correct
 	StatusMissing      LinkStatus = "MISSING"       // Target does not exist
 	StatusWrongLink    LinkStatus = "WRONG_LINK"   // Target is symlink but points to wrong source
 	StatusNotSymlink   LinkStatus = "NOT_SYMLINK"  // Target exists but is not a symlink
 	StatusSourceMissing LinkStatus = "SOURCE_MISSING" // Source file does not exist
+	StatusMismatch     LinkStatus = "MISMATCH"     // Copy target content differs from source
 )
 
 // CheckResult represents the result of checking a single link

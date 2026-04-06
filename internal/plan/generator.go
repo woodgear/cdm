@@ -272,6 +272,10 @@ func (g *Generator) Generate(sourcePaths []string) (*types.Plan, error) {
 	externalEntries := g.collectExternalPathMappings(configs)
 	entries = append(entries, externalEntries...)
 
+	// Collect file mappings (copy instead of symlink)
+	fileEntries := g.collectFileMappings(configs)
+	entries = append(entries, fileEntries...)
+
 	// Build links
 	var statNew, statOverride int
 	links := make([]types.Link, 0, len(entries))
@@ -282,10 +286,15 @@ func (g *Generator) Generate(sourcePaths []string) (*types.Plan, error) {
 			statNew++
 		}
 
+		action := "link"
+		if entry.Reason == "file mapping" {
+			action = "copy"
+		}
+
 		links = append(links, types.Link{
 			Source: entry.Source,
 			Target: entry.Target,
-			Action: "link",
+			Action: action,
 			Reason: entry.Reason,
 		})
 	}
@@ -419,6 +428,58 @@ func (g *Generator) collectExternalPathMappings(configs map[string]*types.Config
 
 			if g.verbose {
 				fmt.Printf("[EXTERNAL_MAPPING] %s -> %s\n", targetExpanded, sourceExpanded)
+			}
+		}
+	}
+
+	return entries
+}
+
+// collectFileMappings collects file mappings (copy instead of symlink)
+func (g *Generator) collectFileMappings(configs map[string]*types.Config) []types.FileEntry {
+	var entries []types.FileEntry
+
+	for srcPath, cfg := range configs {
+		if len(cfg.FileMappings) == 0 {
+			continue
+		}
+
+		for _, mapping := range cfg.FileMappings {
+			// Source path: relative to config file location
+			sourcePath := mapping.Source
+			if !filepath.IsAbs(sourcePath) {
+				sourcePath = filepath.Join(srcPath, sourcePath)
+			}
+
+			// Check if source exists
+			sourceExpanded, err := fs.ExpandPath(sourcePath)
+			if err != nil {
+				continue
+			}
+			if _, err := os.Stat(sourceExpanded); err != nil {
+				if g.verbose {
+					fmt.Printf("[SKIP] File mapping source not found: %s\n", sourceExpanded)
+				}
+				continue
+			}
+
+			// Target path: expand ~ and make absolute
+			targetExpanded, err := fs.ExpandPath(mapping.Target)
+			if err != nil {
+				continue
+			}
+
+			entry := types.FileEntry{
+				Source:     sourceExpanded,
+				Target:     targetExpanded,
+				SourcePath: srcPath,
+				Reason:     "file mapping",
+			}
+
+			entries = append(entries, entry)
+
+			if g.verbose {
+				fmt.Printf("[FILE_MAPPING] %s -> %s\n", sourceExpanded, targetExpanded)
 			}
 		}
 	}

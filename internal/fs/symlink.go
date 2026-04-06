@@ -192,6 +192,97 @@ func copyFile(src, dst string) error {
 	return os.WriteFile(dst, data, info.Mode())
 }
 
+// CopyFile copies a source file to target with backup, sudo, and dry-run support
+func (sm *SymlinkManager) CopyFile(target, source string, opts types.ApplyOptions) error {
+	needsSudo := !isDirWritable(target)
+	if needsSudo && sm.verbose {
+		fmt.Printf("[SUDO] Directory not writable, will use sudo for: %s\n", target)
+	}
+
+	// Backup existing file if requested
+	if opts.Backup {
+		isLink, _ := IsSymlink(target)
+		if !isLink {
+			if _, err := os.Lstat(target); err == nil {
+				backupPath := target + ".backup." + time.Now().Format("20060102_150405")
+				if !opts.DryRun {
+					if err := copyFile(target, backupPath); err != nil {
+						return fmt.Errorf("failed to backup %s: %w", target, err)
+					}
+					if sm.verbose {
+						fmt.Printf("[BACKUP] %s -> %s\n", target, backupPath)
+					}
+				} else {
+					fmt.Printf("[DRY-RUN] Would backup: %s -> %s\n", target, backupPath)
+				}
+			}
+		}
+	}
+
+	// Create parent directory
+	targetDir := filepath.Dir(target)
+	if _, err := os.Stat(targetDir); os.IsNotExist(err) {
+		if !opts.DryRun {
+			var err error
+			if needsSudo {
+				err = mkdirWithSudo(targetDir)
+			} else {
+				err = os.MkdirAll(targetDir, 0755)
+			}
+			if err != nil {
+				return fmt.Errorf("failed to create directory %s: %w", targetDir, err)
+			}
+			if sm.verbose {
+				fmt.Printf("[MKDIR] %s\n", targetDir)
+			}
+		} else {
+			fmt.Printf("[DRY-RUN] Would create directory: %s\n", targetDir)
+		}
+	}
+
+	// Copy file
+	if !opts.DryRun {
+		var err error
+		if needsSudo {
+			err = copyWithSudo(target, source)
+		} else {
+			err = copyFile(source, target)
+		}
+		if err != nil {
+			return fmt.Errorf("failed to copy %s -> %s: %w", source, target, err)
+		}
+		if sm.verbose {
+			fmt.Printf("[COPY] %s -> %s\n", source, target)
+		}
+	} else {
+		fmt.Printf("[DRY-RUN] Would copy: %s -> %s\n", source, target)
+	}
+
+	return nil
+}
+
+// copyWithSudo copies a file using sudo
+func copyWithSudo(target, source string) error {
+	cmd := exec.Command("sudo", "cp", source, target)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+// FileContentsMatch checks if two files have identical content
+func FileContentsMatch(a, b string) (bool, error) {
+	dataA, err := os.ReadFile(a)
+	if err != nil {
+		return false, err
+	}
+	dataB, err := os.ReadFile(b)
+	if err != nil {
+		return false, err
+	}
+	return string(dataA) == string(dataB), nil
+}
+
 // removeWithSudo removes a file using sudo (with terminal access)
 func removeWithSudo(path string) error {
 	cmd := exec.Command("sudo", "rm", "-f", path)
