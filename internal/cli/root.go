@@ -146,9 +146,9 @@ Load completions:
     cdm completion bash > ~/.local/share/bash-completion/completions/cdm
 
   Zsh:
-    cdm completion zsh > "${fpath[1]}/_cdm"
-    # or source in .zshrc:
-    source <(cdm completion zsh)
+    cdm completion zsh > ~/.zfunc/_cdm
+    # ensure ~/.zfunc is in fpath before compinit in .zshrc:
+    #   fpath+=~/.zfunc
 
   Fish:
     cdm completion fish > ~/.config/fish/completions/cdm.fish
