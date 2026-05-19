@@ -17,13 +17,14 @@
 ## 安装
 
 ```bash
-# 从源码构建
-cd cdm
-go build -o cdm ./cmd/cdm
+# 从 GitHub 安装
+go install github.com/woodgear/cdm/cmd/cdm@latest
 
-# 带版本信息
-go build -ldflags "-X main.version=$(git describe --tags)" -o cdm ./cmd/cdm
+# 或从本地源码安装
+go install ./cmd/cdm
 ```
+
+`cdm version` 会自动用 Go build metadata 推导日期版本，优先使用 git commit 时间，其次解析 `go install ...@latest` 的 pseudo-version 或日期 tag。取不到构建来源日期时会显示 `unknown`，不会用运行当天日期伪造版本。
 
 ## 快速开始
 
@@ -192,7 +193,7 @@ cdm plan ./share ./myhost
 
 ```json
 {
-  "version": "1.0.0",
+  "version": "2026.05.19",
   "pathMappings": [
     {
       "source": ".config/nvim",
@@ -280,7 +281,7 @@ cdm plan ./share ./myhost
 
 ```json
 {
-  "version": "1.0.0",
+  "version": "2026.05.19",
   "timestamp": "2026-02-25T23:57:43+08:00",
   "hostname": "myhost",
   "sources": ["/path/to/share", "/path/to/myhost"],

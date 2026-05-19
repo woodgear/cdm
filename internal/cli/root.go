@@ -16,8 +16,8 @@ import (
 )
 
 var (
-	// Version is set at build time
-	Version   = "1.0.0"
+	// Version is resolved from Go build metadata by main.
+	Version   = "auto"
 	GitCommit = "unknown"
 	GitBranch = "unknown"
 	BuildDate = "unknown"
@@ -112,6 +112,7 @@ Example:
 	Args: cobra.MaximumNArgs(1),
 	RunE: runRepoScan,
 }
+
 func init() {
 	// Global flags
 	rootCmd.PersistentFlags().BoolVarP(&flagVerbose, "verbose", "v", false, "Verbose output")

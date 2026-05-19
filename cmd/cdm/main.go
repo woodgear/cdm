@@ -5,21 +5,28 @@ import (
 	"os"
 
 	"github.com/woodgear/cdm/internal/cli"
+	versionpkg "github.com/woodgear/cdm/internal/version"
 )
 
 var (
 	// Set at build time via ldflags
-	version   = "1.0.0"
+	version   = "auto"
 	gitCommit = "unknown"
 	gitBranch = "unknown"
-	buildDate = "unknown"
+	buildDate = "auto"
 )
 
 func main() {
-	cli.Version = version
-	cli.GitCommit = gitCommit
-	cli.GitBranch = gitBranch
-	cli.BuildDate = buildDate
+	versionpkg.Value = version
+	versionpkg.GitCommit = gitCommit
+	versionpkg.GitBranch = gitBranch
+	versionpkg.BuildDate = buildDate
+
+	info := versionpkg.Current()
+	cli.Version = info.Version
+	cli.GitCommit = info.GitCommit
+	cli.GitBranch = info.GitBranch
+	cli.BuildDate = info.BuildDate
 
 	if err := cli.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "[ERROR] %v\n", err)

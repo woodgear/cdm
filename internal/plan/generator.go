@@ -10,6 +10,7 @@ import (
 
 	"github.com/woodgear/cdm/internal/config"
 	"github.com/woodgear/cdm/internal/fs"
+	"github.com/woodgear/cdm/internal/version"
 	"github.com/woodgear/cdm/pkg/types"
 )
 
@@ -307,7 +308,7 @@ func (g *Generator) Generate(sourcePaths []string) (*types.Plan, error) {
 
 	// Build plan
 	plan := &types.Plan{
-		Version:   "1.0.0",
+		Version:   version.Current().Version,
 		Timestamp: time.Now(),
 		Hostname:  hostname,
 		Sources:   resolvedPaths,
