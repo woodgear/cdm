@@ -16,11 +16,27 @@
 
 ## 安装
 
-```bash
-# 从 GitHub 安装
-go install github.com/woodgear/cdm/cmd/cdm@latest
+### 直接安装
 
-# 或从本地源码安装
+```bash
+go install github.com/woodgear/cdm/cmd/cdm@latest
+```
+
+如果需要绕过 Go proxy 缓存，直接从 GitHub 拉取最新提交：
+
+```bash
+GOPROXY=direct go install github.com/woodgear/cdm/cmd/cdm@latest
+```
+
+安装后确保 `$GOPATH/bin` 在 `PATH` 中，然后确认版本：
+
+```bash
+cdm version
+```
+
+### 本地源码安装
+
+```bash
 go install ./cmd/cdm
 ```
 
