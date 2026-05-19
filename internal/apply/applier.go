@@ -61,34 +61,35 @@ func (a *Applier) Apply(plan *types.Plan, opts types.ApplyOptions) error {
 		fmt.Printf("[WARN] DRY-RUN MODE: No changes will be made\n")
 	}
 
-	var count, success, skipped int
+	var count, success int
 
-	for _, link := range plan.Links {
+	for _, task := range plan.Tasks {
 		count++
 
 		if a.verbose {
-			fmt.Printf("[%d] %s <- %s (%s)\n", count, link.Target, link.Source, link.Reason)
+			fmt.Printf("[%d] %s %s <- %s (%s)\n", count, task.Action, task.Target, task.Source, task.Reason)
 		}
 
 		// Check if source exists
-		if _, err := os.Stat(link.Source); os.IsNotExist(err) {
-			fmt.Printf("[WARN] Source file not found, skipping: %s\n", link.Source)
-			skipped++
-			continue
+		if _, err := os.Stat(task.Source); err != nil {
+			return fmt.Errorf("failed to stat source %s: %w", task.Source, err)
 		}
 
-		var err error
-		switch link.Action {
-		case "copy":
-			err = a.sm.CopyFile(link.Target, link.Source, opts)
-		default: // "link"
-			err = a.sm.CreateSymlink(link.Target, link.Source, opts)
-		}
-
-		if err != nil {
-			fmt.Printf("[ERROR] Failed to %s: %s\n", link.Action, err)
-			skipped++
-			continue
+		switch task.Action {
+		case types.ActionLink:
+			if err := a.sm.CreateSymlink(task.Target, task.Source, opts); err != nil {
+				return fmt.Errorf("failed to create symlink for %s: %w", task.Target, err)
+			}
+		case types.ActionCopyIfNotExist:
+			if err := a.sm.CopyIfNotExist(task.Target, task.Source, opts); err != nil {
+				return fmt.Errorf("failed to copy-if-not-exist for %s: %w", task.Target, err)
+			}
+		case types.ActionCopy:
+			if err := a.sm.CopyPath(task.Target, task.Source, true, opts); err != nil {
+				return fmt.Errorf("failed to copy for %s: %w", task.Target, err)
+			}
+		default:
+			return fmt.Errorf("unknown task action %q for %s", task.Action, task.Target)
 		}
 
 		success++
@@ -97,7 +98,7 @@ func (a *Applier) Apply(plan *types.Plan, opts types.ApplyOptions) error {
 	fmt.Printf("[SUCCESS] Apply completed\n")
 	fmt.Printf("  Total: %d\n", count)
 	fmt.Printf("  Success: %d\n", success)
-	fmt.Printf("  Skipped: %d\n", skipped)
+	fmt.Printf("  Skipped: %d\n", 0)
 
 	return nil
 }

@@ -3,6 +3,7 @@ package fs
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -75,6 +76,83 @@ func isDirWritable(target string) bool {
 	}
 	os.Remove(testFile)
 	return true
+}
+
+// CopyIfNotExist copies source to target only when target is absent.
+func (sm *SymlinkManager) CopyIfNotExist(target, source string, opts types.ApplyOptions) error {
+	info, err := os.Lstat(target)
+	if err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("target exists as symlink: %s", target)
+		}
+		if sm.verbose {
+			fmt.Printf("[SKIP] Already exists: %s\n", target)
+		}
+		return nil
+	}
+	if !os.IsNotExist(err) {
+		return fmt.Errorf("failed to stat %s: %w", target, err)
+	}
+
+	return sm.CopyPath(target, source, false, opts)
+}
+
+// CopyPath copies a file or directory to target.
+func (sm *SymlinkManager) CopyPath(target, source string, overwrite bool, opts types.ApplyOptions) error {
+	sourceInfo, err := os.Stat(source)
+	if err != nil {
+		return fmt.Errorf("failed to stat source %s: %w", source, err)
+	}
+
+	targetDir := filepath.Dir(target)
+	if _, err := os.Stat(targetDir); err != nil {
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("failed to stat target directory %s: %w", targetDir, err)
+		}
+		if opts.DryRun {
+			fmt.Printf("[DRY-RUN] Would create directory: %s\n", targetDir)
+		} else if err := os.MkdirAll(targetDir, 0755); err != nil {
+			return fmt.Errorf("failed to create directory %s: %w", targetDir, err)
+		}
+	}
+
+	if _, err := os.Lstat(target); err == nil {
+		if !overwrite {
+			return fmt.Errorf("target already exists: %s", target)
+		}
+		if opts.Backup {
+			backupPath := target + ".backup." + time.Now().Format("20060102_150405")
+			if opts.DryRun {
+				fmt.Printf("[DRY-RUN] Would backup: %s -> %s\n", target, backupPath)
+			} else if err := copyPath(target, backupPath, true); err != nil {
+				return fmt.Errorf("failed to backup %s: %w", target, err)
+			}
+		}
+		if opts.DryRun {
+			fmt.Printf("[DRY-RUN] Would remove: %s\n", target)
+		} else if err := os.RemoveAll(target); err != nil {
+			return fmt.Errorf("failed to remove %s: %w", target, err)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("failed to stat target %s: %w", target, err)
+	}
+
+	if opts.DryRun {
+		fmt.Printf("[DRY-RUN] Would copy: %s -> %s\n", source, target)
+		return nil
+	}
+
+	if sourceInfo.IsDir() {
+		if err := copyDir(source, target); err != nil {
+			return err
+		}
+	} else if err := copyFile(source, target); err != nil {
+		return err
+	}
+	if sm.verbose {
+		fmt.Printf("[COPY] %s -> %s\n", source, target)
+	}
+	return nil
 }
 
 // CreateSymlink creates a symlink with backup and sudo support
@@ -179,17 +257,84 @@ func (sm *SymlinkManager) CreateSymlink(target, source string, opts types.ApplyO
 
 // copyFile copies a file to a new location
 func copyFile(src, dst string) error {
-	data, err := os.ReadFile(src)
-	if err != nil {
-		return err
-	}
-
 	info, err := os.Stat(src)
 	if err != nil {
 		return err
 	}
 
-	return os.WriteFile(dst, data, info.Mode())
+	input, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer input.Close()
+
+	output, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, info.Mode())
+	if err != nil {
+		return err
+	}
+
+	if _, err := io.Copy(output, input); err != nil {
+		output.Close()
+		return err
+	}
+	return output.Close()
+}
+
+func copyDir(src, dst string) error {
+	info, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dst, info.Mode()); err != nil {
+		return err
+	}
+
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		srcPath := filepath.Join(src, entry.Name())
+		dstPath := filepath.Join(dst, entry.Name())
+		if entry.Type()&os.ModeSymlink != 0 {
+			linkTarget, err := os.Readlink(srcPath)
+			if err != nil {
+				return err
+			}
+			if err := os.Symlink(linkTarget, dstPath); err != nil {
+				return err
+			}
+			continue
+		}
+		entryInfo, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if entryInfo.IsDir() {
+			if err := copyDir(srcPath, dstPath); err != nil {
+				return err
+			}
+		} else if err := copyFile(srcPath, dstPath); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func copyPath(src, dst string, overwrite bool) error {
+	if overwrite {
+		if err := os.RemoveAll(dst); err != nil {
+			return err
+		}
+	}
+	info, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		return copyDir(src, dst)
+	}
+	return copyFile(src, dst)
 }
 
 // CopyFile copies a source file to target with backup, sudo, and dry-run support

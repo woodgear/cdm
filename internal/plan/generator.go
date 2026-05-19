@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -27,7 +28,7 @@ func NewScanner(verbose bool) *Scanner {
 // ScanDir scans a directory for files to link
 // baseType: "home" maps to $HOME, "root" maps to /
 // linkFolders: set of absolute paths that should be linked as folders
-func (s *Scanner) ScanDir(srcDir, baseType string, linkFolders map[string]bool) ([]types.FileEntry, error) {
+func (s *Scanner) ScanDir(srcDir, baseType string, linkFolders map[string]bool, skipPaths map[string]bool) ([]types.FileEntry, error) {
 	var entries []types.FileEntry
 
 	var basePath string
@@ -91,6 +92,15 @@ func (s *Scanner) ScanDir(srcDir, baseType string, linkFolders map[string]bool) 
 			return fmt.Errorf("failed to get absolute path: %w", err)
 		}
 
+		for skipPath, skipDir := range skipPaths {
+			if absSource == skipPath || (skipDir && strings.HasPrefix(absSource, skipPath+string(filepath.Separator))) {
+				if info.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+		}
+
 		// Check if this path is under a linkFolder
 		for folderPath := range linkFolders {
 			// If this path is a linkFolder itself
@@ -100,6 +110,7 @@ func (s *Scanner) ScanDir(srcDir, baseType string, linkFolders map[string]bool) 
 					Source:     absSource,
 					Target:     targetPath,
 					SourcePath: srcDir,
+					Action:     types.ActionLink,
 					Reason:     "folder link",
 				})
 				if s.verbose {
@@ -128,6 +139,7 @@ func (s *Scanner) ScanDir(srcDir, baseType string, linkFolders map[string]bool) 
 			Source:     absSource,
 			Target:     targetPath,
 			SourcePath: srcDir,
+			Action:     types.ActionLink,
 			Reason:     "new",
 		})
 
@@ -174,7 +186,7 @@ func (g *Generator) Generate(sourcePaths []string) (*types.Plan, error) {
 
 		info, err := os.Stat(absPath)
 		if err != nil {
-			return nil, fmt.Errorf("source path does not exist: %s", absPath)
+			return nil, fmt.Errorf("failed to stat source path %s: %w", absPath, err)
 		}
 		if !info.IsDir() {
 			return nil, fmt.Errorf("source path is not a directory: %s", absPath)
@@ -191,7 +203,8 @@ func (g *Generator) Generate(sourcePaths []string) (*types.Plan, error) {
 
 	// Build linkFolders set from all configs
 	linkFolders := make(map[string]bool)
-	for configPath, cfg := range configs {
+	for _, configPath := range sortedConfigPaths(configs) {
+		cfg := configs[configPath]
 		for _, folder := range cfg.LinkFolders {
 			// Resolve folder path relative to config location
 			folderAbsPath := filepath.Join(configPath, folder)
@@ -204,7 +217,8 @@ func (g *Generator) Generate(sourcePaths []string) (*types.Plan, error) {
 
 	// Collect all repos from configs
 	var allRepos []types.RepoConfig
-	for configPath, cfg := range configs {
+	for _, configPath := range sortedConfigPaths(configs) {
+		cfg := configs[configPath]
 		for _, repo := range cfg.Repos {
 			// Resolve repo path relative to config location
 			resolvedRepo := repo
@@ -218,6 +232,11 @@ func (g *Generator) Generate(sourcePaths []string) (*types.Plan, error) {
 		}
 	}
 
+	copyEntries, copySkipPaths, err := g.collectCopyMappings(configs)
+	if err != nil {
+		return nil, err
+	}
+
 	// Scan all source directories
 	var allEntries []types.FileEntry
 	for _, srcPath := range resolvedPaths {
@@ -226,14 +245,14 @@ func (g *Generator) Generate(sourcePaths []string) (*types.Plan, error) {
 		}
 
 		// Scan home directory
-		homeEntries, err := g.scanner.ScanDir(srcPath, "home", linkFolders)
+		homeEntries, err := g.scanner.ScanDir(srcPath, "home", linkFolders, copySkipPaths)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan home directory in %s: %w", srcPath, err)
 		}
 		allEntries = append(allEntries, homeEntries...)
 
 		// Scan root directory
-		rootEntries, err := g.scanner.ScanDir(srcPath, "root", linkFolders)
+		rootEntries, err := g.scanner.ScanDir(srcPath, "root", linkFolders, copySkipPaths)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan root directory in %s: %w", srcPath, err)
 		}
@@ -266,33 +285,46 @@ func (g *Generator) Generate(sourcePaths []string) (*types.Plan, error) {
 		entries = append(entries, entry)
 	}
 
-	// Apply path mappings
-	entries = g.applyPathMappings(configs, entries)
+	// Apply remaps
+	entries, err = g.applyRemaps(configs, entries)
+	if err != nil {
+		return nil, err
+	}
 
-	// Collect external path mappings (links to files/dirs outside cdm management)
-	externalEntries := g.collectExternalPathMappings(configs)
+	// Collect external links and copy tasks
+	externalEntries, err := g.collectExternalLinks(configs)
+	if err != nil {
+		return nil, err
+	}
 	entries = append(entries, externalEntries...)
+	entries = append(entries, copyEntries...)
+	sortEntries(entries)
 
-	// Collect file mappings (copy instead of symlink)
-	fileEntries := g.collectFileMappings(configs)
-	entries = append(entries, fileEntries...)
+	targets := make(map[string]types.FileEntry)
+	for _, entry := range entries {
+		if existing, ok := targets[entry.Target]; ok {
+			return nil, fmt.Errorf("target conflict: %s used by %s (%s) and %s (%s)",
+				entry.Target, existing.Source, existing.Action, entry.Source, entry.Action)
+		}
+		targets[entry.Target] = entry
+	}
 
-	// Build links
-	var statNew, statOverride int
-	links := make([]types.Link, 0, len(entries))
+	// Build tasks
+	var statOverride int
+	tasks := make([]types.Task, 0, len(entries))
+	actionStats := make(map[string]int)
 	for _, entry := range entries {
 		if strings.HasPrefix(entry.Reason, "override") {
 			statOverride++
-		} else {
-			statNew++
 		}
 
-		action := "link"
-		if entry.Reason == "file mapping" {
-			action = "copy"
+		action := entry.Action
+		if action == "" {
+			action = types.ActionLink
 		}
+		actionStats[action]++
 
-		links = append(links, types.Link{
+		tasks = append(tasks, types.Task{
 			Source: entry.Source,
 			Target: entry.Target,
 			Action: action,
@@ -303,7 +335,7 @@ func (g *Generator) Generate(sourcePaths []string) (*types.Plan, error) {
 	// Get hostname
 	hostname, err := os.Hostname()
 	if err != nil {
-		hostname = "unknown"
+		return nil, fmt.Errorf("failed to get hostname: %w", err)
 	}
 
 	// Build plan
@@ -312,38 +344,43 @@ func (g *Generator) Generate(sourcePaths []string) (*types.Plan, error) {
 		Timestamp: time.Now(),
 		Hostname:  hostname,
 		Sources:   resolvedPaths,
-		Links:     links,
+		Tasks:     tasks,
 		Repos:     allRepos,
 		Stats: types.Stats{
-			Total:    len(links),
-			New:      statNew,
-			Override: statOverride,
-			Skip:     0,
+			Total:          len(tasks),
+			Link:           actionStats[types.ActionLink],
+			CopyIfNotExist: actionStats[types.ActionCopyIfNotExist],
+			Copy:           actionStats[types.ActionCopy],
+			Override:       statOverride,
+			Skip:           0,
 		},
 	}
 
 	return plan, nil
 }
 
-// applyPathMappings applies path mappings from configuration files
-func (g *Generator) applyPathMappings(configs map[string]*types.Config, entries []types.FileEntry) []types.FileEntry {
-	home, _ := os.UserHomeDir()
+// applyRemaps applies target remaps from configuration files
+func (g *Generator) applyRemaps(configs map[string]*types.Config, entries []types.FileEntry) ([]types.FileEntry, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get home directory: %w", err)
+	}
 
 	result := make([]types.FileEntry, len(entries))
 	copy(result, entries)
 
-	for srcPath, cfg := range configs {
-		if cfg.PathMappings == nil || len(cfg.PathMappings) == 0 {
+	for _, srcPath := range sortedConfigPaths(configs) {
+		cfg := configs[srcPath]
+		if cfg.Remaps == nil || len(cfg.Remaps) == 0 {
 			continue
 		}
 
 		for i, entry := range result {
-			for _, mapping := range cfg.PathMappings {
+			for _, mapping := range cfg.Remaps {
 				// Get relative path from home
 				var relPath string
-				if home != "" && strings.HasPrefix(entry.Target, home) {
-					relPath = strings.TrimPrefix(entry.Target, home)
-					relPath = strings.TrimPrefix(relPath, string(filepath.Separator))
+				if homeRelPath, ok := trimPathPrefix(entry.Target, home); ok {
+					relPath = homeRelPath
 				} else if strings.HasPrefix(entry.Target, "/") {
 					relPath = strings.TrimPrefix(entry.Target, "/")
 				}
@@ -351,12 +388,11 @@ func (g *Generator) applyPathMappings(configs map[string]*types.Config, entries 
 				// Expand ~ in source and convert to relative path
 				sourceExpanded, err := fs.ExpandPath(mapping.Source)
 				if err != nil {
-					continue
+					return nil, err
 				}
 				var sourceRelPath string
-				if home != "" && strings.HasPrefix(sourceExpanded, home) {
-					sourceRelPath = strings.TrimPrefix(sourceExpanded, home)
-					sourceRelPath = strings.TrimPrefix(sourceRelPath, string(filepath.Separator))
+				if homeRelPath, ok := trimPathPrefix(sourceExpanded, home); ok {
+					sourceRelPath = homeRelPath
 				} else if strings.HasPrefix(sourceExpanded, "/") {
 					sourceRelPath = strings.TrimPrefix(sourceExpanded, "/")
 				} else {
@@ -364,15 +400,18 @@ func (g *Generator) applyPathMappings(configs map[string]*types.Config, entries 
 					sourceRelPath = sourceExpanded
 				}
 
-				// Check if relPath starts with mapping source
-				if strings.HasPrefix(relPath, sourceRelPath) {
+				if sourceRelPath == "" {
+					return nil, fmt.Errorf("empty remap source in %s", srcPath)
+				}
+
+				if pathMatchesOrContains(relPath, sourceRelPath) {
 					// Calculate new target
-					newTarget := mapping.Target + strings.TrimPrefix(relPath, sourceRelPath)
+					newTarget := remappedTarget(mapping.Target, strings.TrimPrefix(filepath.Clean(relPath), filepath.Clean(sourceRelPath)))
 
 					// Expand ~ in target
 					expanded, err := fs.ExpandPath(newTarget)
 					if err != nil {
-						continue
+						return nil, err
 					}
 
 					result[i].Target = expanded
@@ -386,35 +425,35 @@ func (g *Generator) applyPathMappings(configs map[string]*types.Config, entries 
 		}
 	}
 
-	return result
+	return result, nil
 }
 
-// collectExternalPathMappings collects path mappings for files/dirs outside cdm management
-func (g *Generator) collectExternalPathMappings(configs map[string]*types.Config) []types.FileEntry {
+// collectExternalLinks collects links for files/dirs outside cdm management
+func (g *Generator) collectExternalLinks(configs map[string]*types.Config) ([]types.FileEntry, error) {
 	var entries []types.FileEntry
 
-	for srcPath, cfg := range configs {
-		if len(cfg.PathMappings) == 0 {
+	for _, srcPath := range sortedConfigPaths(configs) {
+		cfg := configs[srcPath]
+		if len(cfg.ExternalLinks) == 0 {
 			continue
 		}
 
-		for _, mapping := range cfg.PathMappings {
+		for _, mapping := range cfg.ExternalLinks {
 			// Expand source path
 			sourceExpanded, err := fs.ExpandPath(mapping.Source)
 			if err != nil {
-				continue
+				return nil, err
 			}
 
 			// Check if source exists on the system
 			if _, err := os.Stat(sourceExpanded); err != nil {
-				// Source doesn't exist, skip
-				continue
+				return nil, fmt.Errorf("failed to stat external link source %s: %w", sourceExpanded, err)
 			}
 
 			// Expand target path
 			targetExpanded, err := fs.ExpandPath(mapping.Target)
 			if err != nil {
-				continue
+				return nil, err
 			}
 
 			// Create entry: target -> source (symlink points from target to source)
@@ -422,6 +461,7 @@ func (g *Generator) collectExternalPathMappings(configs map[string]*types.Config
 				Source:     sourceExpanded,
 				Target:     targetExpanded,
 				SourcePath: srcPath,
+				Action:     types.ActionLink,
 				Reason:     "external mapping",
 			}
 
@@ -433,57 +473,115 @@ func (g *Generator) collectExternalPathMappings(configs map[string]*types.Config
 		}
 	}
 
-	return entries
+	return entries, nil
 }
 
-// collectFileMappings collects file mappings (copy instead of symlink)
-func (g *Generator) collectFileMappings(configs map[string]*types.Config) []types.FileEntry {
+func (g *Generator) collectCopyMappings(configs map[string]*types.Config) ([]types.FileEntry, map[string]bool, error) {
 	var entries []types.FileEntry
+	skipPaths := make(map[string]bool)
 
-	for srcPath, cfg := range configs {
-		if len(cfg.FileMappings) == 0 {
-			continue
+	for _, srcPath := range sortedConfigPaths(configs) {
+		cfg := configs[srcPath]
+		for _, mapping := range cfg.CopyIfNotExist {
+			entry, sourceIsDir, err := g.copyEntry(srcPath, mapping, types.ActionCopyIfNotExist)
+			if err != nil {
+				return nil, nil, err
+			}
+			entries = append(entries, entry)
+			skipPaths[entry.Source] = sourceIsDir
 		}
 
-		for _, mapping := range cfg.FileMappings {
-			// Source path: relative to config file location
-			sourcePath := mapping.Source
-			if !filepath.IsAbs(sourcePath) {
-				sourcePath = filepath.Join(srcPath, sourcePath)
-			}
-
-			// Check if source exists
-			sourceExpanded, err := fs.ExpandPath(sourcePath)
+		for _, mapping := range cfg.Copy {
+			entry, sourceIsDir, err := g.copyEntry(srcPath, mapping, types.ActionCopy)
 			if err != nil {
-				continue
+				return nil, nil, err
 			}
-			if _, err := os.Stat(sourceExpanded); err != nil {
-				if g.verbose {
-					fmt.Printf("[SKIP] File mapping source not found: %s\n", sourceExpanded)
-				}
-				continue
-			}
-
-			// Target path: expand ~ and make absolute
-			targetExpanded, err := fs.ExpandPath(mapping.Target)
-			if err != nil {
-				continue
-			}
-
-			entry := types.FileEntry{
-				Source:     sourceExpanded,
-				Target:     targetExpanded,
-				SourcePath: srcPath,
-				Reason:     "file mapping",
-			}
-
 			entries = append(entries, entry)
-
-			if g.verbose {
-				fmt.Printf("[FILE_MAPPING] %s -> %s\n", sourceExpanded, targetExpanded)
-			}
+			skipPaths[entry.Source] = sourceIsDir
 		}
 	}
 
-	return entries
+	return entries, skipPaths, nil
+}
+
+func (g *Generator) copyEntry(configPath string, mapping types.PathMapping, action string) (types.FileEntry, bool, error) {
+	source, err := resolveConfigSource(configPath, mapping.Source)
+	if err != nil {
+		return types.FileEntry{}, false, err
+	}
+	sourceInfo, err := os.Stat(source)
+	if err != nil {
+		return types.FileEntry{}, false, fmt.Errorf("failed to stat copy source %s: %w", source, err)
+	}
+	target, err := fs.ExpandPath(mapping.Target)
+	if err != nil {
+		return types.FileEntry{}, false, err
+	}
+	return types.FileEntry{
+		Source:     source,
+		Target:     target,
+		SourcePath: configPath,
+		Action:     action,
+		Reason:     action,
+	}, sourceInfo.IsDir(), nil
+}
+
+func resolveConfigSource(configPath, source string) (string, error) {
+	expanded, err := fs.ExpandPath(source)
+	if err != nil {
+		return "", err
+	}
+	if filepath.IsAbs(expanded) {
+		return expanded, nil
+	}
+	return filepath.Abs(filepath.Join(configPath, expanded))
+}
+
+func sortedConfigPaths(configs map[string]*types.Config) []string {
+	paths := make([]string, 0, len(configs))
+	for path := range configs {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+func sortEntries(entries []types.FileEntry) {
+	sort.SliceStable(entries, func(i, j int) bool {
+		if entries[i].Target != entries[j].Target {
+			return entries[i].Target < entries[j].Target
+		}
+		if entries[i].Action != entries[j].Action {
+			return entries[i].Action < entries[j].Action
+		}
+		return entries[i].Source < entries[j].Source
+	})
+}
+
+func pathMatchesOrContains(path, prefix string) bool {
+	cleanPath := filepath.Clean(path)
+	cleanPrefix := filepath.Clean(prefix)
+	return cleanPath == cleanPrefix || strings.HasPrefix(cleanPath, cleanPrefix+string(filepath.Separator))
+}
+
+func trimPathPrefix(path, prefix string) (string, bool) {
+	if prefix == "" {
+		return "", false
+	}
+	cleanPath := filepath.Clean(path)
+	cleanPrefix := filepath.Clean(prefix)
+	if cleanPath == cleanPrefix {
+		return "", true
+	}
+	if strings.HasPrefix(cleanPath, cleanPrefix+string(filepath.Separator)) {
+		return strings.TrimPrefix(cleanPath, cleanPrefix+string(filepath.Separator)), true
+	}
+	return "", false
+}
+
+func remappedTarget(target, suffix string) string {
+	if suffix == "" {
+		return target
+	}
+	return filepath.Join(target, strings.TrimPrefix(suffix, string(filepath.Separator)))
 }

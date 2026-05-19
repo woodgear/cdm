@@ -38,8 +38,8 @@ var rootCmd = &cobra.Command{
 	Use:   "cdm",
 	Short: "CDM - Config/Dotfile Manager",
 	Long: `CDM (Config/Dotfile Manager) is a tool for managing dotfiles
-with multi-layer override support. It creates symlinks from source
-configuration files to target locations.`,
+with multi-layer override support. It deploys configuration files with
+explicit link and copy tasks.`,
 }
 
 // planCmd represents the plan command
@@ -48,14 +48,16 @@ var planCmd = &cobra.Command{
 	Short: "Generate execution plan",
 	Long: `Generate an execution plan from source directories.
 
-Source directories should contain 'home/' and/or 'root/' subdirectories:
+Source directories may contain 'home/' and/or 'root/' subdirectories:
   source/
-  ├── home/          → Files to link to $HOME
+  ├── home/          → Files to link to $HOME by default
   │   ├── .bashrc
   │   └── .config/
-  └── root/          → Files to link to /
-      └── etc/
-          └── hosts
+  ├── root/          → Files to link to / by default
+  │   └── etc/
+  │       └── hosts
+
+Files referenced by copy tasks are excluded from default link scanning.
 
 If no paths are specified and CDM_BASE is set, paths are auto-discovered:
   - $CDM_BASE/share (common config, low priority)
@@ -67,7 +69,7 @@ If no paths are specified and CDM_BASE is set, paths are auto-discovered:
 var applyCmd = &cobra.Command{
 	Use:   "apply [plan-file]",
 	Short: "Apply execution plan",
-	Long: `Apply an execution plan to create symlinks.
+	Long: `Apply an execution plan.
 
 If no plan file is specified, uses ./cdm-plan.json by default.`,
 	RunE: runApply,
@@ -86,16 +88,16 @@ This is equivalent to running 'plan' followed by 'apply'.`,
 // checkCmd represents the check command
 var checkCmd = &cobra.Command{
 	Use:   "check [paths...]",
-	Short: "Check link status",
-	Long: `Check if all links are correctly applied.
+	Short: "Check task status",
+	Long: `Check if all tasks are correctly applied.
 
 If no paths are specified and CDM_BASE is set, paths are auto-discovered:
   - $CDM_BASE/share (common config, low priority)
   - $CDM_BASE/<hostname> (host-specific config, high priority)
 
 Exit codes:
-  0 - All links OK
-  1 - Some links need attention`,
+  0 - All tasks OK
+  1 - Some tasks need attention`,
 	RunE: runCheck,
 }
 
@@ -258,15 +260,16 @@ func runPlan(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Printf("[SUCCESS] Plan generated: %s\n", flagOutput)
-	fmt.Printf("  Total files: %d\n", p.Stats.Total)
-	fmt.Printf("  New: %d\n", p.Stats.New)
+	fmt.Printf("  Total tasks: %d\n", p.Stats.Total)
+	fmt.Printf("  Link: %d\n", p.Stats.Link)
+	fmt.Printf("  Copy if not exist: %d\n", p.Stats.CopyIfNotExist)
+	fmt.Printf("  Copy: %d\n", p.Stats.Copy)
 	fmt.Printf("  Override: %d\n", p.Stats.Override)
 
 	if flagVerbose {
 		fmt.Println("\n[INFO] Plan preview:")
-		data, _ := apply.ReadPlan(flagOutput)
-		for _, link := range data.Links {
-			fmt.Printf("  %s -> %s (%s)\n", link.Target, link.Source, link.Reason)
+		for _, task := range p.Tasks {
+			fmt.Printf("  %s %s -> %s (%s)\n", task.Action, task.Target, task.Source, task.Reason)
 		}
 	}
 
@@ -318,7 +321,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to write plan: %w", err)
 	}
 
-	// Apply plan (symlinks)
+	// Apply plan tasks
 	applier := apply.NewApplier(flagVerbose)
 	opts := types.ApplyOptions{
 		DryRun:  flagDryRun,
@@ -359,8 +362,8 @@ func runCheck(cmd *cobra.Command, args []string) error {
 
 	allOK := true
 
-	// Check symlinks
-	if len(p.Links) > 0 {
+	// Check tasks
+	if len(p.Tasks) > 0 {
 		checker := check.NewChecker(flagVerbose)
 		report := checker.CheckPlan(p)
 		check.PrintReport(report, flagVerbose, flagIgnoreOK)
