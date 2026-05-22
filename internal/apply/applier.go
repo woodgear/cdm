@@ -72,24 +72,29 @@ func (a *Applier) Apply(plan *types.Plan, opts types.ApplyOptions) error {
 
 		// Check if source exists
 		if _, err := os.Stat(task.Source); err != nil {
-			return fmt.Errorf("failed to stat source %s: %w", task.Source, err)
+			fmt.Printf("[WARN] skipping %s %s: source not found: %v\n", task.Action, task.Target, err)
+			continue
 		}
 
 		switch task.Action {
 		case types.ActionLink:
 			if err := a.sm.CreateSymlink(task.Target, task.Source, opts); err != nil {
-				return fmt.Errorf("failed to create symlink for %s: %w", task.Target, err)
+				fmt.Printf("[WARN] failed to create symlink for %s: %v\n", task.Target, err)
+				continue
 			}
 		case types.ActionCopyIfNotExist:
 			if err := a.sm.CopyIfNotExist(task.Target, task.Source, opts); err != nil {
-				return fmt.Errorf("failed to copy-if-not-exist for %s: %w", task.Target, err)
+				fmt.Printf("[WARN] copy-if-not-exist for %s: %v\n", task.Target, err)
+				continue
 			}
 		case types.ActionCopy:
 			if err := a.sm.CopyPath(task.Target, task.Source, true, opts); err != nil {
-				return fmt.Errorf("failed to copy for %s: %w", task.Target, err)
+				fmt.Printf("[WARN] failed to copy for %s: %v\n", task.Target, err)
+				continue
 			}
 		default:
-			return fmt.Errorf("unknown task action %q for %s", task.Action, task.Target)
+			fmt.Printf("[WARN] unknown task action %q for %s\n", task.Action, task.Target)
+			continue
 		}
 
 		success++

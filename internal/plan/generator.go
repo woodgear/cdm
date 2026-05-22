@@ -442,18 +442,21 @@ func (g *Generator) collectExternalLinks(configs map[string]*types.Config) ([]ty
 			// Expand source path
 			sourceExpanded, err := fs.ExpandPath(mapping.Source)
 			if err != nil {
-				return nil, err
+				fmt.Printf("[WARN] skipping external link %s: failed to expand source: %v\n", mapping.Source, err)
+				continue
 			}
 
 			// Check if source exists on the system
 			if _, err := os.Stat(sourceExpanded); err != nil {
-				return nil, fmt.Errorf("failed to stat external link source %s: %w", sourceExpanded, err)
+				fmt.Printf("[WARN] skipping external link %s: source not found: %s\n", mapping.Source, sourceExpanded)
+				continue
 			}
 
 			// Expand target path
 			targetExpanded, err := fs.ExpandPath(mapping.Target)
 			if err != nil {
-				return nil, err
+				fmt.Printf("[WARN] skipping external link %s -> %s: failed to expand target: %v\n", mapping.Source, mapping.Target, err)
+				continue
 			}
 
 			// Create entry: target -> source (symlink points from target to source)
