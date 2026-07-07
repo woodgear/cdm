@@ -142,11 +142,14 @@ cdm deploy --backup -v
 
 ### `cdm check [paths...]`
 
-检查链接状态，验证配置是否正确应用。
+检查链接状态，验证配置是否正确应用。默认只输出需要处理的项目。
 
 ```bash
 # 自动发现
 cdm check
+
+# 显示 OK 项
+cdm check --show-ok
 
 # 指定路径
 cdm check /path/to/configs

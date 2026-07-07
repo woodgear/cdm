@@ -31,6 +31,7 @@ var (
 
 	// Check-specific flags
 	flagIgnoreOK bool
+	flagShowOK   bool
 )
 
 // rootCmd represents the base command
@@ -126,7 +127,8 @@ func init() {
 	planCmd.Flags().StringVarP(&flagOutput, "output", "o", "./cdm-plan.json", "Output plan file")
 
 	// Check-specific flags
-	checkCmd.Flags().BoolVar(&flagIgnoreOK, "ignore-ok", false, "Hide OK status entries")
+	checkCmd.Flags().BoolVar(&flagIgnoreOK, "ignore-ok", true, "Hide OK status entries")
+	checkCmd.Flags().BoolVar(&flagShowOK, "show-ok", false, "Show OK status entries")
 
 	// Add commands
 	rootCmd.AddCommand(planCmd)
@@ -366,7 +368,7 @@ func runCheck(cmd *cobra.Command, args []string) error {
 	if len(p.Tasks) > 0 {
 		checker := check.NewChecker(flagVerbose)
 		report := checker.CheckPlan(p)
-		check.PrintReport(report, flagVerbose, flagIgnoreOK)
+		check.PrintReport(report, flagVerbose, flagIgnoreOK && !flagShowOK)
 		if !report.AllOK {
 			allOK = false
 		}
